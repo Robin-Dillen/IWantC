@@ -1,8 +1,5 @@
 import builtins
 import inspect
-from functools import wraps
-
-from forbiddenfruit import cursed, curse
 
 
 def get_unbound_vars(func) -> set[str]:
@@ -29,32 +26,57 @@ def get_unbound_vars(func) -> set[str]:
 
 class CClass(type):
     def __new__(mcs, *args, **kwargs):
+        if args[0] in ('private', 'protected'):
+            return super(CClass, mcs).__new__(mcs, *args, **kwargs)
         if '__init__' not in args[2]:
             raise Exception("Must implement an __init__ function!")
         vars_ = get_unbound_vars(args[2]['__init__']) - (set(args[2].keys()) | {args[0], })
         args[2]["__slots__"] = vars_
 
-        def __getattribute__(self, name):
-            attr = object.__getattribute__(self, name)
-            if getattr(attr, "access", 0) == 2 and not getattr(__getattribute__, "inside", False):
-                raise AttributeError("Accessing private function")
-            if getattr(attr, "access", 0) == 1 and not getattr(__getattribute__, "inside", False):
-                raise AttributeError("Accessing protected function")
-            return attr
+        # def __getattribute_extern__(self, name):
+        #     attr = object.__getattribute__(self, name)
+        #     if getattr(attr, "access", 0) == 2 and not getattr(__getattribute_extern__, "inside", False):
+        #         raise AttributeError("Accessing private function")
+        #     if getattr(attr, "access", 0) == 1 and not getattr(__getattribute_extern__, "inside", False):
+        #         raise AttributeError("Accessing protected function")
+        #     return attr
+        #
+        # def __getattribute_intern__(self, name):
+        #     attr = None
+        #     if hasattr(super(type(self), self), name):
+        #         attr = getattr(super(type(self), self), name)
+        #         if getattr(attr, "access", 0) == 2 and not getattr(__getattribute_extern__, "inside", False):
+        #             raise AttributeError("Accessing private function")
+        #     else:
+        #         attr = object.__getattribute__(self, name)
+        #     return attr
+        #
+        # for name, func in [(key, val) for key, val in args[2].items() if inspect.isfunction(val)]:
+        #     def wrapper(self, *fargs, __f=func, **fkwargs):
+        #         self.__class__.__getattr__ = __getattribute_intern__
+        #         ret = __f(self, *fargs, **fkwargs)
+        #         if hasattr(self.__class__, '__getattr__'):
+        #             del self.__class__.__getattr__
+        #         return ret
+        #
+        #     args[2][name] = wraps(func)(wrapper)
+        #
+        # args[2]["__getattribute__"] = __getattribute_extern__
 
-        for name, func in [(key, val) for key, val in args[2].items() if inspect.isfunction(val)]:
-            def wrapper(self, *fargs, __f=func, **fkwargs):
-                self.__class__.__getattr__ = object.__getattribute__
-                ret = __f(self, *fargs, **fkwargs)
-                if hasattr(self.__class__, '__getattr__'):
-                    del self.__class__.__getattr__
-                return ret
+        private_functions = {key: val for key, val in list(args[2].items()) if
+                             getattr(val, "access", 0) == 2 and (args[2].pop(key) or 1)}
+        protected_functions = {key: val for key, val in list(args[2].items()) if
+                               getattr(val, "access", 0) == 1 and (args[2].pop(key) or 1)}
 
-            args[2][name] = wraps(func)(wrapper)
+        cls: type = super(CClass, mcs).__new__(mcs, *args, **kwargs)
 
-        args[2]["__getattribute__"] = __getattribute__
+        private_functions |= {"__init__": lambda self: None}
+        cls.private = type("private", (cls,), private_functions)()
 
-        return super(CClass, mcs).__new__(mcs, *args, **kwargs)
+        protected_functions |= {"__init__": lambda self: None}
+        cls.protected = type("protected", (cls,), protected_functions)()
+
+        return cls
 
 
 def private(f):
@@ -98,15 +120,15 @@ class Foo(metaclass=CClass):
         print("prot")
         pass
 
+    def __getattribute__(self, item):
+        return object.__getattribute__(self, item)
+
 
 class Bar(Foo):
     def __init__(self):
         self.d = "hello"
         super(Bar, self).__init__()
 
-bar = Bar()
-bar.pub()
-bar.prot()
 
 foo = Foo()
 foo.pub()
